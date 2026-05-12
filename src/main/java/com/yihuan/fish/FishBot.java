@@ -61,6 +61,9 @@ public final class FishBot implements Runnable {
     return stopRequested;
   }
 
+  public int getFishCaughtCount() { return fishCaughtCount; }
+  public int getTotalFishCaught() { return totalFishCaught; }
+
   @Override
   public void run() {
     LOG.info("Fish bot started. Focus game window; F12 stops.");
@@ -218,6 +221,10 @@ public final class FishBot implements Runnable {
       fishCaughtCount++;
       totalFishCaught++;
       LOG.info("Fish caught! Total: " + totalFishCaught + " (cycle: " + fishCaughtCount + ")");
+      if (cfg.maxFishCount > 0 && totalFishCaught >= cfg.maxFishCount) {
+        LOG.info("Reached max fish count (" + cfg.maxFishCount + "), stopping.");
+        requestStop();
+      }
     }
   }
 

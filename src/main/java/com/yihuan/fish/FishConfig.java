@@ -239,6 +239,9 @@ public final class FishConfig {
   /** Number of fish caught before auto-sell triggers. */
   public int sellThreshold = 100;
 
+  /** Stop the bot after this many total fish (0 = never stop). */
+  public int maxFishCount = 0;
+
   /** Sell icon in the warehouse — ROI margins (pixels from client edges). */
   public int sellIconMarginLeft = 65;
   public int sellIconMarginRight = 1140;
