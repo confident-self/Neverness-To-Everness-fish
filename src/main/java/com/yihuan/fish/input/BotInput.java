@@ -133,6 +133,29 @@ public final class BotInput {
   }
 
   /** Left-click at a specific screen coordinate with jitter and hold duration. */
+  /** 将游戏窗口调到前台（只对支持 PostMessage 的键盘模式有效）. */
+  public void ensureGameForeground() {
+    beforePointer();
+  }
+
+  /**
+   * 前台物理点击: 将游戏调到前台后用 Robot 模拟真实鼠标.
+   * 用于游戏有防脚本检测、SendInput/PostMessage 均无效的按钮.
+   */
+  public void foregroundLeftClickHoldAt(int screenX, int screenY, int jitterPx, int holdMs) {
+    ThreadLocalRandom r = ThreadLocalRandom.current();
+    int jx = r.nextInt(-jitterPx, jitterPx + 1);
+    int jy = r.nextInt(-jitterPx, jitterPx + 1);
+    int sx = screenX + jx;
+    int sy = screenY + jy;
+    beforePointer(); // 游戏调到前台
+    robot.mouseMove(sx, sy);
+    robot.delay(Math.max(0, cfg.preClickHoverMs));
+    robot.mousePress(InputEvent.BUTTON1_DOWN_MASK);
+    robot.delay(holdMs);
+    robot.mouseRelease(InputEvent.BUTTON1_DOWN_MASK);
+  }
+
   public void leftClickHoldAt(int screenX, int screenY, int jitterPx, int holdMs) {
     ThreadLocalRandom r = ThreadLocalRandom.current();
     int jx = r.nextInt(-jitterPx, jitterPx + 1);
@@ -140,16 +163,18 @@ public final class BotInput {
     int sx = screenX + jx;
     int sy = screenY + jy;
     if (cfg.postMessageKeys && gameWindow != null && gameWindow.isValid()) {
-      SemiBackgroundMouse.backgroundClickHold(gameWindow.getHwnd(), sx, sy, holdMs);
+      int hover = cfg.preClickHoverMs;
+      SemiBackgroundMouse.backgroundClickHold(gameWindow.getHwnd(), sx, sy, holdMs, hover);
       sleepMs(30 + r.nextInt(40));
       return;
     }
+    int hover = cfg.preClickHoverMs;
     beforePointer();
     if (cfg.winSendInputMouse) {
-      WinSendInputMouse.leftClickHoldScreen(sx, sy, holdMs);
+      WinSendInputMouse.leftClickHoldScreen(sx, sy, holdMs, hover);
     } else {
       robot.mouseMove(sx, sy);
-      robot.delay(30 + r.nextInt(40));
+      robot.delay(Math.max(0, hover));
       robot.mousePress(InputEvent.BUTTON1_DOWN_MASK);
       robot.delay(holdMs);
       robot.mouseRelease(InputEvent.BUTTON1_DOWN_MASK);
@@ -229,9 +254,11 @@ public final class BotInput {
       return;
     }
     long t = System.currentTimeMillis();
-    if (t - lastRefocusMs < cfg.refocusGameWindowMinIntervalMs) {
+    // If game is already foreground, skip refocus (saves flicker).
+    if (gameWindow.isForeground()) {
       return;
     }
+    // Game lost focus — refocus immediately, ignore rate limit.
     lastRefocusMs = t;
     if (cfg.winUseAttachThreadInputForFocus) {
       gameWindow.activateForKeyboardInput();
@@ -246,7 +273,7 @@ public final class BotInput {
       return;
     }
     long t = System.currentTimeMillis();
-    if (t - lastRefocusMs < cfg.refocusGameWindowMinIntervalMs) {
+    if (gameWindow.isForeground()) {
       return;
     }
     lastRefocusMs = t;

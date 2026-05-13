@@ -9,6 +9,7 @@ import com.sun.jna.platform.win32.WinDef.HWND;
 import com.sun.jna.platform.win32.WinDef.RECT;
 import com.sun.jna.platform.win32.WinDef.POINT;
 import com.sun.jna.platform.win32.WinUser;
+import com.sun.jna.ptr.IntByReference;
 
 import java.awt.Rectangle;
 
@@ -22,6 +23,11 @@ public final class GameWindow {
   }
 
   public boolean refresh() {
+    // 缓存优先: 只要已找到的 HWND 仍然有效, 就不重新搜索
+    // 防止浏览器标签页等非游戏窗口因标题包含"异环"被误匹配
+    if (isValid()) {
+      return true;
+    }
     HWND found = findByTitleContains(titleContains);
     hwnd = found;
     return found != null;
@@ -35,6 +41,7 @@ public final class GameWindow {
     return hwnd != null && User32.INSTANCE.IsWindow(hwnd);
   }
 
+  /** True if the game window is the current foreground window. */
   public boolean isForeground() {
     if (!isValid()) {
       return false;
@@ -140,9 +147,16 @@ public final class GameWindow {
 
   private static HWND findByTitleContains(String needle) {
     final HWND[] out = {null};
+    final int ourPid = Kernel32.INSTANCE.GetCurrentProcessId();
+    final IntByReference winPid = new IntByReference();
     User32.INSTANCE.EnumWindows(
         (hWnd, data) -> {
           if (!User32.INSTANCE.IsWindowVisible(hWnd)) {
+            return true;
+          }
+          // 排除我们自己进程的窗口（如 UI 界面 "异环自动钓鱼"）
+          User32.INSTANCE.GetWindowThreadProcessId(hWnd, winPid);
+          if (winPid.getValue() == ourPid) {
             return true;
           }
           char[] title = new char[512];

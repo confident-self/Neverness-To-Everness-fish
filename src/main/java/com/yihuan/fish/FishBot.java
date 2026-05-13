@@ -1,6 +1,9 @@
 package com.yihuan.fish;
 
 import com.yihuan.fish.input.BotInput;
+import com.yihuan.fish.vision.TemplateBank;
+import com.yihuan.fish.vision.TemplateMatcher;
+import com.yihuan.fish.vision.TemplateMatcher.Match;
 import com.yihuan.fish.win.GameWindow;
 
 import java.awt.Color;
@@ -24,6 +27,7 @@ public final class FishBot implements Runnable {
   private final PhaseStabilizer stabilizer;
   private final BaitShopFlow baitShop;
   private final AutoSellFlow autoSell;
+  private final TemplateBank bank;
 
   private volatile boolean stopRequested;
 
@@ -39,7 +43,8 @@ public final class FishBot implements Runnable {
   private boolean autoSellWasActive;
 
   public FishBot(FishConfig cfg, GameWindow window, BotInput input, PhaseDetector detector,
-                 PhaseStabilizer stabilizer, BaitShopFlow baitShop, AutoSellFlow autoSell) {
+                 PhaseStabilizer stabilizer, BaitShopFlow baitShop, AutoSellFlow autoSell,
+                 TemplateBank bank) {
     this.cfg = cfg;
     this.window = window;
     this.input = input;
@@ -47,6 +52,7 @@ public final class FishBot implements Runnable {
     this.stabilizer = stabilizer;
     this.baitShop = baitShop;
     this.autoSell = autoSell;
+    this.bank = bank;
   }
 
   public void requestStop() {
@@ -72,7 +78,10 @@ public final class FishBot implements Runnable {
         try {
           tick();
         } catch (Exception ex) {
-          LOG.log(Level.WARNING, "Tick error", ex);
+          String stateInfo = "stable=" + prevStable
+              + " baitShop=" + (baitShop != null ? baitShop.state() : "null")
+              + " autoSell=" + (autoSell != null ? autoSell.state() : "null");
+          LOG.log(Level.SEVERE, "Tick error (" + stateInfo + ")", ex);
           input.humanGapMs(400, 900);
         }
       }
@@ -138,9 +147,21 @@ public final class FishBot implements Runnable {
             autoSell.tick(shot, client, window.getHwnd());
           } else {
             releaseSteerKey();
-            if (fishCaughtCount >= cfg.sellThreshold && cfg.sellThreshold > 0) {
+            if (cfg.needsSellBeforeBait) {
+              LOG.info("需要先售卖再购买鱼饵");
+              cfg.needsSellBeforeBait = false;
+              autoSell.start();
+            } else if (fishCaughtCount >= cfg.sellThreshold && cfg.sellThreshold > 0) {
               autoSell.start();
             } else {
+              // 月卡弹窗检测: 只在 UTC+8 3:55~4:05 窗口内检查
+              if (isMonthlyCardTimeWindow()) {
+                checkMonthlyCardPopup(client);
+              }
+              // Pre-READY 检测: 误触ESC来到钓鱼前页面时, 点"开始钓鱼"
+              if (checkPreReady(client)) {
+                return;
+              }
               prepSpamF();
               baitShop.onCastAttempt();
             }
@@ -347,6 +368,111 @@ public final class FishBot implements Runnable {
     if (steerKeyHeld != 0) {
       input.keyUp(steerKeyHeld);
       steerKeyHeld = 0;
+    }
+  }
+
+  /** 判断当前时间是否在月卡检测窗口(UTC+8 3:55~4:05)内 */
+  private boolean isMonthlyCardTimeWindow() {
+    java.util.Calendar c = java.util.Calendar.getInstance();
+    // 转为 UTC+8
+    c.add(java.util.Calendar.HOUR_OF_DAY, 8);
+    int h = c.get(java.util.Calendar.HOUR_OF_DAY);
+    int m = c.get(java.util.Calendar.MINUTE);
+    int start = cfg.monthlyCardCheckHourStart * 60 + cfg.monthlyCardCheckMinuteStart;
+    int end = cfg.monthlyCardCheckHourEnd * 60 + cfg.monthlyCardCheckMinuteEnd;
+    int now = h * 60 + m;
+    return now >= start && now <= end;
+  }
+
+  /** 检测 Pre-READY 界面, 如果有则点击"开始钓鱼"并验证是否进入 READY */
+  private boolean checkPreReady(Rectangle client) {
+    BufferedImage shot = input.captureScreen(client);
+    if (shot == null) return false;
+    try {
+      // --- 先检测"开始钓鱼"按钮 ---
+      int w = shot.getWidth();
+      int h = shot.getHeight();
+      int rx = cfg.preReadyBtnMarginLeft;
+      int ry = cfg.preReadyBtnMarginTop;
+      int rw = w - rx - cfg.preReadyBtnMarginRight;
+      int rh = h - ry - cfg.preReadyBtnMarginBottom;
+      if (rw < bank.preReadyStartBtn.getWidth() || rh < bank.preReadyStartBtn.getHeight()) return false;
+      Match m = TemplateMatcher.matchBest(shot, rx, ry, rw, rh, bank.preReadyStartBtn, 2);
+      if (m.score() < cfg.preReadyBtnThreshold) return false;
+
+      int cx = client.x + m.x() + bank.preReadyStartBtn.getWidth() / 2;
+      int cy = client.y + m.y() + bank.preReadyStartBtn.getHeight() / 2;
+      LOG.info("检测到 Pre-READY 界面, 点击开始钓鱼 (" + cx + "," + cy + ") score="
+          + String.format("%.2f", m.score()));
+      input.leftClickHoldAt(cx, cy, 0, 300);
+
+      // --- 检测鱼饵未选择弹窗 ---
+      for (int i = 0; i < 5; i++) {
+        input.humanGapMs(100, 150);
+        BufferedImage check = input.captureScreen(client);
+        if (check == null) continue;
+        try {
+          int cw = check.getWidth();
+          int ch = check.getHeight();
+          int brx = cfg.baitNotSelectedMarginLeft;
+          int bry = cfg.baitNotSelectedMarginTop;
+          int brw = cw - brx - cfg.baitNotSelectedMarginRight;
+          int brh = ch - bry - cfg.baitNotSelectedMarginBottom;
+          if (brw >= bank.baitNotSelected.getWidth() && brh >= bank.baitNotSelected.getHeight()) {
+            Match bm = TemplateMatcher.matchBest(check, brx, bry, brw, brh, bank.baitNotSelected, 2);
+            if (bm.score() >= cfg.baitNotSelectedThreshold) {
+              int bCx = client.x + bm.x() + bank.baitNotSelected.getWidth() / 2;
+              int bCy = client.y + bm.y() + bank.baitNotSelected.getHeight() / 2;
+              LOG.info("检测到鱼饵未选择弹窗, 点击打开轮盘选择鱼饵");
+              input.leftClickHoldAt(bCx, bCy, 0, 200);
+              baitShop.startWheelSelection();
+              return true; // 启动轮盘, 后续 tick 会处理 baitShop
+            }
+          }
+          // 检查开始钓鱼按钮是否消失（正常进入 READY）
+          int prw = cw - cfg.preReadyBtnMarginLeft - cfg.preReadyBtnMarginRight;
+          int prh = ch - cfg.preReadyBtnMarginTop - cfg.preReadyBtnMarginBottom;
+          if (prw >= bank.preReadyStartBtn.getWidth() && prh >= bank.preReadyStartBtn.getHeight()) {
+            Match m2 = TemplateMatcher.matchBest(check, cfg.preReadyBtnMarginLeft, cfg.preReadyBtnMarginTop,
+                prw, prh, bank.preReadyStartBtn, 2);
+            if (m2.score() < cfg.preReadyBtnThreshold) {
+              LOG.info("✓ 已进入 READY 页面");
+              return false;
+            }
+          }
+        } finally {
+          check.flush();
+        }
+      }
+      LOG.warning("点击开始钓鱼后界面仍在, 再点一次");
+      return true;
+    } finally {
+      shot.flush();
+    }
+  }
+
+  /** 检测并关闭月卡弹窗（TODO 点击位置后续可配置） */
+  private void checkMonthlyCardPopup(Rectangle client) {
+    BufferedImage shot = input.captureScreen(client);
+    if (shot == null) return;
+    try {
+      int w = shot.getWidth();
+      int h = shot.getHeight();
+      int rx = cfg.monthlyCardRoiLeft;
+      int ry = cfg.monthlyCardRoiTop;
+      int rw = w - rx - cfg.monthlyCardRoiRight;
+      int rh = h - ry - cfg.monthlyCardRoiBottom;
+      if (rw < bank.monthlyCardPopup.getWidth() || rh < bank.monthlyCardPopup.getHeight()) return;
+      Match m = TemplateMatcher.matchBest(shot, rx, ry, rw, rh, bank.monthlyCardPopup, 2);
+      if (m.score() >= cfg.monthlyCardThreshold) {
+        LOG.info("检测到月卡弹窗(score=" + String.format("%.2f", m.score()) + "), 点击屏幕中央关闭");
+        // TODO 点击位置后续根据实际按钮位置调整
+        int cx = client.x + client.width / 2;
+        int cy = client.y + client.height / 2;
+        input.leftClickHoldAt(cx, cy, 0, 300);
+      }
+    } finally {
+      shot.flush();
     }
   }
 

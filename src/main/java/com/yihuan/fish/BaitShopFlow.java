@@ -6,9 +6,15 @@ import com.yihuan.fish.vision.TemplateBank;
 import com.yihuan.fish.vision.TemplateMatcher;
 import com.yihuan.fish.vision.TemplateMatcher.Match;
 
+import java.awt.Graphics2D;
 import java.awt.Rectangle;
 import java.awt.image.BufferedImage;
+import java.io.File;
+import java.io.IOException;
+import javax.imageio.ImageIO;
+import com.yihuan.fish.input.SemiBackgroundMouse;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 public final class BaitShopFlow {
@@ -26,7 +32,9 @@ public final class BaitShopFlow {
     CLICK_PURCHASE,
     CLICK_CONFIRM,
     CLICK_DISMISS,
-    EXIT_SHOP
+    EXIT_SHOP,
+    /** 退出商城后截图验证是否真的回到了钓鱼界面 */
+    VERIFY_EXIT
   }
 
   private final FishConfig cfg;
@@ -43,6 +51,9 @@ public final class BaitShopFlow {
   // 加满点击验证
   private boolean fillUpClicked;
   private int fillUpRetryCount;
+
+  // 退出商城验证
+  private int exitVerifyRetryCount;
 
   // 卡死脱离: 当商城流程结束后如果连续STUCK_ESC_THRESHOLD次
   // doCheckNoBait都无无料提示, 说明可能卡在某个界面, 按ESC脱离
@@ -72,6 +83,18 @@ public final class BaitShopFlow {
     purchased = false;
     fillUpClicked = false;
     fillUpRetryCount = 0;
+    exitVerifyRetryCount = 0;
+  }
+
+  /** 直接从轮盘选择装备鱼饵（用于 Pre-READY 页面鱼饵未选择的场景） */
+  public void startWheelSelection() {
+    state = State.SELECT_BAIT_WHEEL;
+    stepDelayRemaining = 0;
+    wheelItemClicked = false;
+    actionClickAttempted = false;
+    wheelRetryCount = 0;
+    purchased = false; // false: 没饵就进商城买, 有饵就装备
+    LOG.info("【选饵轮盘】启动轮盘选择鱼饵");
   }
 
   public void tick(BufferedImage shot, Rectangle client, HWND hwnd) {
@@ -82,17 +105,23 @@ public final class BaitShopFlow {
       return;
     }
 
-    switch (state) {
-      case CHECK_NO_BAIT     -> doCheckNoBait(shot, client, hwnd);
-      case ENTER_SHOP        -> doEnterShop(hwnd);
-      case SELECT_BAIT_WHEEL -> doSelectBaitWheel(shot, client, hwnd);
-      case SELECT_BAIT       -> doSelectBait(client, hwnd);
-      case CLICK_FILL_UP     -> doClickFillUp(client, hwnd);
-      case CLICK_PURCHASE    -> doClickPurchase(client, hwnd);
-      case CLICK_CONFIRM     -> doClickConfirm(client, hwnd);
-      case CLICK_DISMISS     -> doClickDismiss(client, hwnd);
-      case EXIT_SHOP         -> doExitShop(hwnd);
-      default -> reset();
+    try {
+      switch (state) {
+        case CHECK_NO_BAIT     -> doCheckNoBait(shot, client, hwnd);
+        case ENTER_SHOP        -> doEnterShop(hwnd);
+        case SELECT_BAIT_WHEEL -> doSelectBaitWheel(shot, client, hwnd);
+        case SELECT_BAIT       -> doSelectBait(client, hwnd);
+        case CLICK_FILL_UP     -> doClickFillUp(client, hwnd);
+        case CLICK_PURCHASE    -> doClickPurchase(client, hwnd);
+        case CLICK_CONFIRM     -> doClickConfirm(client, hwnd);
+        case CLICK_DISMISS     -> doClickDismiss(client, hwnd);
+        case EXIT_SHOP         -> doExitShop(hwnd);
+        case VERIFY_EXIT       -> doVerifyExit(shot, client, hwnd);
+        default -> reset();
+      }
+    } catch (Exception e) {
+      LOG.log(Level.SEVERE, "【BaitShopFlow】异常 state=" + state + ": " + e.getMessage(), e);
+      reset();
     }
   }
 
@@ -105,6 +134,7 @@ public final class BaitShopFlow {
     purchased = false;
     fillUpClicked = false;
     fillUpRetryCount = 0;
+    exitVerifyRetryCount = 0;
     markFlowInactive();
   }
 
@@ -150,6 +180,16 @@ public final class BaitShopFlow {
       }
 
       wheelItemClicked = true;
+      stepDelayRemaining = cfg.baitShopUiTransitionMs;
+      return;
+    }
+
+    // --- 检测并关闭鱼饵详情弹窗（点击鱼饵后可能出现） ---
+    if (isDetailPopupVisible(shot)) {
+      LOG.info("【选饵轮盘】检测到鱼饵详情弹窗, 点击空白关闭");
+      int dx = client.x + client.width / 2;
+      int dy = client.y + (int) (client.height * 0.9);
+      input.leftClickHoldAt(dx, dy, 0, 200);
       stepDelayRemaining = cfg.baitShopUiTransitionMs;
       return;
     }
@@ -245,6 +285,19 @@ public final class BaitShopFlow {
     return m.score() >= cfg.baitShopBaitWheelItemThreshold;
   }
 
+  /** 检测轮盘鱼饵详情弹窗是否可见 */
+  private boolean isDetailPopupVisible(BufferedImage shot) {
+    int w = shot.getWidth();
+    int h = shot.getHeight();
+    int rx = cfg.baitWheelDetailPopupMarginLeft;
+    int ry = cfg.baitWheelDetailPopupMarginTop;
+    int rw = w - rx - cfg.baitWheelDetailPopupMarginRight;
+    int rh = h - ry - cfg.baitWheelDetailPopupMarginBottom;
+    if (rw < bank.baitWheelDetailPopup.getWidth() || rh < bank.baitWheelDetailPopup.getHeight()) return false;
+    Match m = TemplateMatcher.matchBest(shot, rx, ry, rw, rh, bank.baitWheelDetailPopup, 2);
+    return m.score() >= cfg.baitWheelDetailPopupThreshold;
+  }
+
   private void emergencyExitFromWheel(HWND hwnd) {
     LOG.warning("【紧急逃生】ESC×2 退出轮盘, 返回钓鱼界面");
     input.keyTap(cfg.baitShopEscVk);
@@ -282,6 +335,19 @@ public final class BaitShopFlow {
     } finally {
       shot.flush();
     }
+  }
+
+  /** 检查截图中的(554,335,557,334)区域是否匹配货币不足提示 */
+  private boolean isNoCurrency(BufferedImage shot) {
+    int w = shot.getWidth();
+    int h = shot.getHeight();
+    int rx = cfg.baitShopNoCurrencyMarginLeft;
+    int ry = cfg.baitShopNoCurrencyMarginTop;
+    int rw = w - rx - cfg.baitShopNoCurrencyMarginRight;
+    int rh = h - ry - cfg.baitShopNoCurrencyMarginBottom;
+    if (rw < bank.noCurrency.getWidth() || rh < bank.noCurrency.getHeight()) return false;
+    Match m = TemplateMatcher.matchBest(shot, rx, ry, rw, rh, bank.noCurrency, 2);
+    return m.score() >= cfg.baitShopNoCurrencyThreshold;
   }
 
   // ================================================================
@@ -380,8 +446,8 @@ public final class BaitShopFlow {
         int centerX = client.x + m.x() + bank.baitItem.getWidth() / 2;
         int centerY = client.y + m.y() + bank.baitItem.getHeight() / 2;
         LOG.info("【商城选饵】✓ 匹配到鱼饵 (" + centerX + "," + centerY
-            + ") 分数=" + String.format("%.2f", m.score()) + ", 右键选中中...");
-        input.rightClickHoldAt(centerX, centerY, 0, cfg.baitShopBaitItemRightClickHoldMs);
+            + ") 分数=" + String.format("%.2f", m.score()) + ", 左键选中中...");
+        input.leftClickHoldAt(centerX, centerY, 0, cfg.baitShopBaitItemRightClickHoldMs);
         wheelRetryCount = 0;
         advance(State.CLICK_FILL_UP, cfg.baitShopUiTransitionMs);
       } else {
@@ -421,44 +487,53 @@ public final class BaitShopFlow {
 
   private void doClickFillUp(Rectangle client, HWND hwnd) {
     if (!fillUpClicked) {
-      // 阶段1: 点击加满按钮
-      LOG.info("【点击加满】点击加满按钮 (第" + (fillUpRetryCount + 1) + "/" + MAX_RETRIES + "次)...");
+      // 阶段1: 匹配加满按钮.png → 点击匹配位置
       BufferedImage shot = input.captureScreen(client);
       if (shot == null) {
-        LOG.warning("【点击加满】截图失败, 跳过");
-        advance(State.CLICK_PURCHASE, cfg.baitShopUiTransitionMs);
+        LOG.warning("【点击加满】截图失败, 跳过购买");
+        fillUpClicked = false;
+        fillUpRetryCount = 0;
+        advance(State.SELECT_BAIT, cfg.baitShopUiTransitionMs);
         return;
       }
-      try {
-        int w = shot.getWidth();
-        int h = shot.getHeight();
-        int roiX = cfg.baitShopFillUpBtnMarginLeft;
-        int roiY = cfg.baitShopFillUpBtnMarginTop;
-        int roiW = w - cfg.baitShopFillUpBtnMarginLeft - cfg.baitShopFillUpBtnMarginRight;
-        int roiH = h - cfg.baitShopFillUpBtnMarginTop - cfg.baitShopFillUpBtnMarginBottom;
+      int w = shot.getWidth();
+      int h = shot.getHeight();
+      int roiX = cfg.baitShopFillUpBtnMarginLeft;
+      int roiY = cfg.baitShopFillUpBtnMarginTop;
+      int roiW = w - roiX - cfg.baitShopFillUpBtnMarginRight;
+      int roiH = h - roiY - cfg.baitShopFillUpBtnMarginBottom;
 
-        boolean found = false;
-        if (roiW >= bank.fillUpBtn.getWidth() && roiH >= bank.fillUpBtn.getHeight()) {
-          Match m = TemplateMatcher.matchBest(shot, roiX, roiY, roiW, roiH, bank.fillUpBtn, 2);
-          if (m.score() >= cfg.baitShopFillUpBtnThreshold) {
-            int cx = client.x + m.x() + bank.fillUpBtn.getWidth() / 2;
-            int cy = client.y + m.y() + bank.fillUpBtn.getHeight() / 2;
-            LOG.info("【点击加满】✓ 匹配到按钮 (" + cx + "," + cy + ") 分数="
-                + String.format("%.2f", m.score()) + ", 点击中...");
-            input.leftClickHoldAt(cx, cy, 0, cfg.baitShopWheelClickHoldMs);
-            found = true;
-          }
+      boolean clicked = false;
+      if (roiW >= bank.fillUpBtn.getWidth() && roiH >= bank.fillUpBtn.getHeight()) {
+        Match m = TemplateMatcher.matchBest(shot, roiX, roiY, roiW, roiH, bank.fillUpBtn, 2);
+        if (m.score() >= cfg.baitShopFillUpBtnThreshold) {
+          int cx = client.x + m.x() + bank.fillUpBtn.getWidth() / 2;
+          int cy = client.y + m.y() + bank.fillUpBtn.getHeight() / 2;
+          LOG.info("【点击加满】✓ 匹配到按钮 (" + cx + "," + cy + ") 分数="
+              + String.format("%.2f", m.score()) + " (第" + (fillUpRetryCount + 1) + "/" + MAX_RETRIES + "次)");
+          SemiBackgroundMouse.backgroundClickHold(hwnd, cx, cy, cfg.baitShopFillUpBtnHoldMs, 0);
+          clicked = true;
         }
-
-        if (!found) {
-          int cx = client.x + roiX + roiW / 2;
-          int cy = client.y + roiY + roiH / 2;
-          LOG.info("【点击加满】使用固定位置 (" + cx + "," + cy + "), 点击中...");
-          input.leftClickHoldAt(cx, cy, 0, cfg.baitShopWheelClickHoldMs);
-        }
-      } finally {
-        shot.flush();
       }
+
+      if (!clicked) {
+        fillUpRetryCount++;
+        if (fillUpRetryCount < MAX_RETRIES) {
+          LOG.info("【点击加满】未匹配到按钮, 重试 (第" + (fillUpRetryCount + 1) + "/" + MAX_RETRIES + "次)");
+          stepDelayRemaining = 200;
+        } else {
+          debugSave(shot, "fillup_nobtn", "加满按钮.png 在ROI内未匹配到");
+          LOG.warning("【点击加满】匹配不到按钮, ESC退出商城");
+          input.keyTap(cfg.baitShopEscVk);
+          input.humanGapMs(200, 350);
+          fillUpClicked = false;
+          fillUpRetryCount = 0;
+          advance(State.SELECT_BAIT, cfg.baitShopUiTransitionMs);
+        }
+        shot.flush();
+        return;
+      }
+      shot.flush();
       fillUpClicked = true;
       stepDelayRemaining = cfg.baitShopUiTransitionMs;
       return;
@@ -495,12 +570,32 @@ public final class BaitShopFlow {
         fillUpRetryCount = 0;
         advance(State.CLICK_PURCHASE, cfg.baitShopUiTransitionMs);
       } else {
-        LOG.info("【点击加满】验证未通过, ESC返回商城重试");
-        input.keyTap(cfg.baitShopEscVk);
-        input.humanGapMs(200, 350);
-        fillUpClicked = false;
-        fillUpRetryCount = 0;
-        advance(State.SELECT_BAIT, cfg.baitShopUiTransitionMs);
+        // 检查是否货币不足弹窗
+        if (isNoCurrency(verifyShot)) {
+          LOG.warning("【点击加满】检测到货币不足弹窗, ESC关闭, 标记售卖前置");
+          input.keyTap(cfg.baitShopEscVk);
+          input.humanGapMs(200, 350);
+          fillUpClicked = false;
+          fillUpRetryCount = 0;
+          cfg.needsSellBeforeBait = true;
+          markFlowInactive();
+          reset();
+        } else {
+          fillUpRetryCount++;
+          if (fillUpRetryCount < MAX_RETRIES) {
+            LOG.info("【点击加满】验证未通过, 重试点击 (第" + (fillUpRetryCount + 1) + "/" + MAX_RETRIES + "次)");
+            fillUpClicked = false;
+            stepDelayRemaining = 200;
+          } else {
+            debugSave(verifyShot, "fillup_noverify", "拉满.png 在确认ROI内未匹配到");
+            LOG.warning("【点击加满】已达最大重试次数, ESC返回商城");
+            input.keyTap(cfg.baitShopEscVk);
+            input.humanGapMs(200, 350);
+            fillUpClicked = false;
+            fillUpRetryCount = 0;
+            advance(State.SELECT_BAIT, cfg.baitShopUiTransitionMs);
+          }
+        }
       }
     } finally {
       verifyShot.flush();
@@ -581,18 +676,55 @@ public final class BaitShopFlow {
   // ================================================================
 
   private void doExitShop(HWND hwnd) {
-    LOG.info("【退出商城】ESC×2 关闭购买成功页, 返回READY");
+    LOG.info("【退出商城】ESC×2 关闭购买成功页");
     input.keyTap(cfg.baitShopEscVk);
     input.humanGapMs(200, 350);
     input.keyTap(cfg.baitShopEscVk);
-    markFlowInactive();
-    reset();
+    exitVerifyRetryCount = 0;
+    advance(State.VERIFY_EXIT, cfg.baitShopUiTransitionMs);
+  }
+
+  /** 验证是否已退出商城, 如果还在则继续ESC */
+  private void doVerifyExit(BufferedImage shot, Rectangle client, HWND hwnd) {
+    if (isInShop(shot)) {
+      exitVerifyRetryCount++;
+      if (exitVerifyRetryCount < MAX_RETRIES) {
+        LOG.info("【验证退出】仍在商城, 再次ESC (第" + (exitVerifyRetryCount + 1) + "/" + MAX_RETRIES + "次)");
+        input.keyTap(cfg.baitShopEscVk);
+        input.humanGapMs(200, 350);
+        stepDelayRemaining = cfg.baitShopUiTransitionMs;
+      } else {
+        LOG.warning("【验证退出】多次ESC仍在商城, 强制重置");
+        markFlowInactive();
+        reset();
+      }
+    } else {
+      LOG.info("【验证退出】✓ 已退出商城, 返回钓鱼");
+      markFlowInactive();
+      reset();
+    }
   }
 
   // ================================================================
 
+  /** Save a debug screenshot when something unexpected happens. */
+  private void debugSave(BufferedImage img, String tag, String detail) {
+    try {
+      File out = cfg.imageDir.resolve("debug_" + tag + ".png").toFile();
+      ImageIO.write(img, "PNG", out);
+      LOG.info("【调试截图】已保存 " + out.getName() + " — " + detail);
+    } catch (IOException e) {
+      LOG.log(Level.WARNING, "【调试截图】保存失败", e);
+    }
+  }
+
   private void advance(State next, int delayMs) {
+    LOG.info("【状态】" + state + " → " + next + "  (等待" + delayMs + "ms)");
     state = next;
     stepDelayRemaining = delayMs;
+  }
+
+  private void logState(String msg) {
+    LOG.info("【" + state + "】" + msg);
   }
 }

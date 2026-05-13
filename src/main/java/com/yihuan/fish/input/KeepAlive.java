@@ -8,9 +8,13 @@ import com.sun.jna.platform.win32.WinDef.WPARAM;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Periodically sends {@code WM_ACTIVATE(WA_ACTIVE)} to trick the game into
- * believing it is the foreground window. Without this, many games pause or
+ * Periodically sends {@code WM_ACTIVATE(WA_ACTIVE)} via {@code SendMessage} to trick the game
+ * into believing it is the foreground window. Without this, many games pause or
  * ignore {@code PostMessage} input once they detect they are inactive.
+ *
+ * Uses {@code SendMessage} (blocking, synchronous) so the game processes the activation
+ * before the next event is sent, avoiding the oscillation issues that {@code PostMessage}
+ * can cause when the game checks its actual foreground state.
  */
 public final class KeepAlive {
 
@@ -27,12 +31,10 @@ public final class KeepAlive {
     Thread t =
         new Thread(
             () -> {
+              WPARAM wActive = new WPARAM(WA_ACTIVE);
+              LPARAM zero = new LPARAM(0);
               while (running.get()) {
-                User32.INSTANCE.SendMessage(
-                    hwnd,
-                    WM_ACTIVATE,
-                    new WPARAM(WA_ACTIVE),
-                    new LPARAM(0));
+                User32.INSTANCE.SendMessage(hwnd, WM_ACTIVATE, wActive, zero);
                 try {
                   Thread.sleep(3000);
                 } catch (InterruptedException e) {

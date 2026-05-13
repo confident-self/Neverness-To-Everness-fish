@@ -66,10 +66,10 @@ public final class WinSendInputMouse {
   }
 
   /**
-   * Left-click-and-hold at screen coordinates via SendInput.
-   * Unlike {@link #leftClickScreen}, this sends LEFT DOWN, waits {@code holdMs}, then sends LEFT UP.
+   * Left-click-and-hold at screen coordinates via SendInput, with pre-hover.
+   * Sends MOVE, waits {@code hoverMs}, sends DOWN, waits {@code holdMs}, sends UP.
    */
-  public static void leftClickHoldScreen(int screenX, int screenY, int holdMs) {
+  public static void leftClickHoldScreen(int screenX, int screenY, int holdMs, int hoverMs) {
     int vx = User32.INSTANCE.GetSystemMetrics(WinUser.SM_XVIRTUALSCREEN);
     int vy = User32.INSTANCE.GetSystemMetrics(WinUser.SM_YVIRTUALSCREEN);
     int vw = User32.INSTANCE.GetSystemMetrics(WinUser.SM_CXVIRTUALSCREEN);
@@ -86,31 +86,51 @@ public final class WinSendInputMouse {
     ny = Math.max(0, Math.min(65535, ny));
 
     int baseFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
-    // Move + down
-    WinUser.INPUT[] downBatch = (WinUser.INPUT[]) new WinUser.INPUT().toArray(2);
-    fillMouse(downBatch[0], nx, ny, baseFlags);
-    fillMouse(downBatch[1], nx, ny, baseFlags | MOUSEEVENTF_LEFTDOWN);
-    int cb = downBatch[0].size();
-    DWORD sent = User32.INSTANCE.SendInput(new DWORD(2), downBatch, cb);
-    if (sent == null || sent.intValue() != 2) {
-      int v = sent == null ? -1 : sent.intValue();
-      LOG.log(Level.WARNING, "SendInput hold down: expected 2 events, got {0}", v);
+    int cb = new WinUser.INPUT().size();
+
+    // 1. Move only — hover before pressing
+    WinUser.INPUT[] moveBatch = (WinUser.INPUT[]) new WinUser.INPUT().toArray(1);
+    fillMouse(moveBatch[0], nx, ny, baseFlags);
+    DWORD sent = User32.INSTANCE.SendInput(new DWORD(1), moveBatch, cb);
+    if (sent == null || sent.intValue() != 1) {
+      LOG.log(Level.WARNING, "SendInput move: expected 1 event, got {0}", sent);
     }
 
-    try {
-      Thread.sleep(holdMs);
-    } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
+    sleepMs(hoverMs);
+
+    // 2. Down
+    WinUser.INPUT[] downBatch = (WinUser.INPUT[]) new WinUser.INPUT().toArray(1);
+    fillMouse(downBatch[0], nx, ny, baseFlags | MOUSEEVENTF_LEFTDOWN);
+    sent = User32.INSTANCE.SendInput(new DWORD(1), downBatch, cb);
+    if (sent == null || sent.intValue() != 1) {
+      LOG.log(Level.WARNING, "SendInput down: expected 1 event, got {0}", sent);
     }
 
-    // Up
+    sleepMs(holdMs);
+
+    // 3. Up
     WinUser.INPUT[] upBatch = (WinUser.INPUT[]) new WinUser.INPUT().toArray(1);
     fillMouse(upBatch[0], nx, ny, baseFlags | MOUSEEVENTF_LEFTUP);
     sent = User32.INSTANCE.SendInput(new DWORD(1), upBatch, cb);
     if (sent == null || sent.intValue() != 1) {
-      int v = sent == null ? -1 : sent.intValue();
-      LOG.log(Level.WARNING, "SendInput hold up: expected 1 event, got {0}", v);
+      LOG.log(Level.WARNING, "SendInput up: expected 1 event, got {0}", sent);
     }
+  }
+
+  /**
+   * Background left-click-and-hold: saves cursor, moves to target, clicks via SendInput
+   * (which updates GetAsyncKeyState / DirectInput / Raw Input), then restores cursor.
+   */
+  public static void backgroundLeftClickHold(int screenX, int screenY, int holdMs, int hoverMs) {
+    POINT old = new POINT();
+    User32.INSTANCE.GetCursorPos(old);
+    leftClickHoldScreen(screenX, screenY, holdMs, hoverMs);
+    User32.INSTANCE.SetCursorPos(old.x, old.y);
+  }
+
+  private static void sleepMs(int ms) {
+    if (ms <= 0) return;
+    try { Thread.sleep(ms); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
   }
 
   public static void leftClickScreen(int screenX, int screenY) {

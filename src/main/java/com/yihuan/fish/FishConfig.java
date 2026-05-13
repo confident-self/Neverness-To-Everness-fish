@@ -160,6 +160,13 @@ public final class FishConfig {
   /** Template match threshold for the bait wheel item (E_购买万能饵料.png). */
   public double baitShopBaitWheelItemThreshold = 0.70;
 
+  /** 轮盘鱼饵详情弹窗 — 点击目标鱼饵后可能出现, 用 /image/E_弹窗判断.png 检测 */
+  public int baitWheelDetailPopupMarginLeft = 456;
+  public int baitWheelDetailPopupMarginRight = 460;
+  public int baitWheelDetailPopupMarginTop = 155;
+  public int baitWheelDetailPopupMarginBottom = 432;
+  public double baitWheelDetailPopupThreshold = 0.70;
+
   /**
    * Bait wheel purchase button ROI margins (pixels from client edges).
    * Clicked after selecting the bait in the wheel to enter the shop.
@@ -194,6 +201,12 @@ public final class FishConfig {
 
   /** Template match threshold for 加满按钮.png. */
   public double baitShopFillUpBtnThreshold = 0.70;
+
+  /** 加满按钮点击时长(ms), 比普通按钮稍长以避免概率性无响应. */
+  public int baitShopFillUpBtnHoldMs = 250;
+
+  /** 点击前悬停时间(ms), 模拟真人操作, 避免游戏防脚本检测. */
+  public int preClickHoverMs = 50;
 
   /**
    * 加满后的验证区域 — 截图与 /image/拉满.png 模板对比.
@@ -242,16 +255,26 @@ public final class FishConfig {
   /** Stop the bot after this many total fish (0 = never stop). */
   public int maxFishCount = 0;
 
+  /** 货币不足弹窗 — 在商城中右键选中鱼饵后可能出现 */
+  public int baitShopNoCurrencyMarginLeft = 554;
+  public int baitShopNoCurrencyMarginRight = 557;
+  public int baitShopNoCurrencyMarginTop = 335;
+  public int baitShopNoCurrencyMarginBottom = 334;
+  public double baitShopNoCurrencyThreshold = 0.70;
+
+  /** BaitShopFlow 检测到货币不足时设此标志, FishBot 收到后触发售卖流程 */
+  public volatile boolean needsSellBeforeBait;
+
   /** Sell icon in the warehouse — ROI margins (pixels from client edges). */
   public int sellIconMarginLeft = 65;
   public int sellIconMarginRight = 1140;
   public int sellIconMarginTop = 245;
   public int sellIconMarginBottom = 415;
 
-  /** "一键售卖" button — ROI margins. */
-  public int sellAllBtnMarginLeft = 651;
-  public int sellAllBtnMarginRight = 511;
-  public int sellAllBtnMarginTop = 639;
+  /** "一键售卖" button — ROI margins (1280x720). */
+  public int sellAllBtnMarginLeft = 660;
+  public int sellAllBtnMarginRight = 521;
+  public int sellAllBtnMarginTop = 631;
   public int sellAllBtnMarginBottom = 63;
 
   /** "确认" button on the sell confirm dialog — ROI margins. */
@@ -259,6 +282,39 @@ public final class FishConfig {
   public int sellConfirmBtnMarginRight = 384;
   public int sellConfirmBtnMarginTop = 452;
   public int sellConfirmBtnMarginBottom = 230;
+
+  /** 出售确认弹窗验证 — 点击一键售卖后用 /image/一键出售确认弹窗.png 校验 */
+  public int sellConfirmDialogMarginLeft = 581;
+  public int sellConfirmDialogMarginRight = 583;
+  public int sellConfirmDialogMarginTop = 226;
+  public int sellConfirmDialogMarginBottom = 450;
+  public double sellConfirmDialogThreshold = 0.70;
+
+  /** 鱼饵未选择弹窗 — 点击"开始钓鱼"后如果没装鱼饵会弹出, 点击后打开轮盘 */
+  public int baitNotSelectedMarginLeft = 1099;
+  public int baitNotSelectedMarginRight = 78;
+  public int baitNotSelectedMarginTop = 470;
+  public int baitNotSelectedMarginBottom = 166;
+  public double baitNotSelectedThreshold = 0.70;
+
+  /** Pre-READY 界面检测 — 匹配 /image/开始钓鱼.png, 匹配到后点击该位置 */
+  public int preReadyBtnMarginLeft = 841;
+  public int preReadyBtnMarginRight = 27;
+  public int preReadyBtnMarginTop = 595;
+  public int preReadyBtnMarginBottom = 61;
+  public double preReadyBtnThreshold = 0.70;
+
+  /** TODE 月卡弹窗检测 — 检测区域(屏幕中央半区), 点击位置暂时用屏幕中心 */
+  public int monthlyCardRoiLeft = 320;
+  public int monthlyCardRoiRight = 320;
+  public int monthlyCardRoiTop = 180;
+  public int monthlyCardRoiBottom = 180;
+  public double monthlyCardThreshold = 0.70;
+  /** 检测窗口(UTC+8): 3:55 ~ 4:05 */
+  public int monthlyCardCheckHourStart = 3;
+  public int monthlyCardCheckMinuteStart = 55;
+  public int monthlyCardCheckHourEnd = 4;
+  public int monthlyCardCheckMinuteEnd = 5;
 
   /** VK code: cast from ready (default F). */
   public int castVk = java.awt.event.KeyEvent.VK_F;

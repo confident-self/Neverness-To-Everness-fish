@@ -1,7 +1,15 @@
 target/
+output/
 *.class
 .settings/
 .project
 .classpath
 *.iml
 *.log
+debug_*
+image/debug_*.png
+image/screenshot_debug.png
+image/app.ico
+staging/
+staging_tmp/
+output2/

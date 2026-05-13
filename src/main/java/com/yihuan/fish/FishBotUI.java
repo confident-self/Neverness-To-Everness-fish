@@ -1,6 +1,7 @@
 package com.yihuan.fish;
 
 import com.formdev.flatlaf.FlatDarkLaf;
+import com.formdev.flatlaf.FlatLightLaf;
 import com.yihuan.fish.input.BotInput;
 import com.yihuan.fish.input.KeepAlive;
 import com.yihuan.fish.input.WinConsole;
@@ -10,11 +11,11 @@ import com.yihuan.fish.win.WinUser32;
 
 import javax.swing.*;
 import javax.swing.text.DefaultCaret;
+import java.awt.image.BufferedImage;
 import java.awt.*;
-import java.io.PrintWriter;
-import java.io.StringWriter;
+import java.awt.event.AWTEventListener;
+import java.awt.event.KeyEvent;
 import java.text.SimpleDateFormat;
-import java.util.Date;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.*;
 
@@ -30,26 +31,36 @@ public final class FishBotUI {
   private final JButton stopBtn;
   private final JSpinner sellThresholdSpinner;
   private final JSpinner maxFishSpinner;
+  private final JButton themeBtn;
 
+  private boolean darkTheme = true;
   private volatile FishBot bot;
-  private volatile Thread botThread;
   private volatile boolean running;
+  private AWTEventListener fKeyFilter;
 
   public FishBotUI() {
     FlatDarkLaf.setup();
 
-    frame = new JFrame("异环自动钓鱼");
+    frame = new JFrame("NToE-Fish - 异环自动钓鱼");
     frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
     frame.setSize(700, 560);
+    frame.setIconImage(createAppIcon());
     frame.setLocationRelativeTo(null);
     frame.setLayout(new BorderLayout(8, 8));
 
     // ── Status bar ──
-    JPanel statusPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 12, 4));
+    JPanel statusPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
+    themeBtn = new JButton(darkTheme ? "☀" : "🌙");
+    themeBtn.setFont(themeBtn.getFont().deriveFont(13f));
+    themeBtn.setFocusable(false);
+    themeBtn.setMargin(new Insets(0, 4, 0, 4));
+    themeBtn.addActionListener(e -> toggleTheme());
+
     statusLabel = new JLabel("● 停止");
     statusLabel.setForeground(Color.RED);
     statusLabel.setFont(statusLabel.getFont().deriveFont(Font.BOLD, 14f));
     fishCountLabel = new JLabel("🎣 钓鱼: 0  周期: 0");
+    statusPanel.add(themeBtn);
     statusPanel.add(statusLabel);
     statusPanel.add(fishCountLabel);
     frame.add(statusPanel, BorderLayout.NORTH);
@@ -100,8 +111,7 @@ public final class FishBotUI {
     logArea = new JTextArea(12, 50);
     logArea.setEditable(false);
     logArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
-    logArea.setBackground(new Color(30, 30, 30));
-    logArea.setForeground(new Color(200, 200, 200));
+    applyLogColors();
     ((DefaultCaret) logArea.getCaret()).setUpdatePolicy(DefaultCaret.ALWAYS_UPDATE);
     JScrollPane scroll = new JScrollPane(logArea);
     scroll.setBorder(BorderFactory.createTitledBorder("运行日志"));
@@ -127,7 +137,78 @@ public final class FishBotUI {
     }, "f12-poller");
     f12.setDaemon(true);
     f12.start();
+
+    // ── Filter F key from reaching UI components ──
+    installFKeyFilter();
   }
+
+  /** 生成一个简单的应用图标（蓝色圆形+白色F） */
+  private static Image createAppIcon() {
+    int s = 64;
+    BufferedImage img = new BufferedImage(s, s, BufferedImage.TYPE_INT_ARGB);
+    Graphics2D g = img.createGraphics();
+    g.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
+    // 蓝色圆形背景
+    g.setColor(new Color(41, 128, 185));
+    g.fillOval(1, 1, s - 2, s - 2);
+    g.setColor(new Color(52, 152, 219));
+    g.fillOval(6, 6, s - 12, s - 12);
+    // 白色字母 F
+    g.setColor(Color.WHITE);
+    g.setFont(new Font("Arial", Font.BOLD, 36));
+    FontMetrics fm = g.getFontMetrics();
+    String f = "F";
+    int fx = (s - fm.stringWidth(f)) / 2;
+    int fy = (s + fm.getAscent()) / 2 - 2;
+    g.drawString(f, fx, fy);
+    g.dispose();
+    return img;
+  }
+
+  // ══════════════════════════════════════════
+  //  Theme toggle
+  // ══════════════════════════════════════════
+
+  private void toggleTheme() {
+    darkTheme = !darkTheme;
+    if (darkTheme) {
+      FlatDarkLaf.setup();
+      themeBtn.setText("☀");
+    } else {
+      FlatLightLaf.setup();
+      themeBtn.setText("🌙");
+    }
+    applyLogColors();
+    SwingUtilities.updateComponentTreeUI(frame);
+  }
+
+  private void applyLogColors() {
+    if (darkTheme) {
+      logArea.setBackground(new Color(30, 30, 30));
+      logArea.setForeground(new Color(200, 200, 200));
+    } else {
+      logArea.setBackground(new Color(245, 245, 245));
+      logArea.setForeground(new Color(30, 30, 30));
+    }
+  }
+
+  // ══════════════════════════════════════════
+  //  Filter F key from bot spamming into UI
+  // ══════════════════════════════════════════
+
+  private void installFKeyFilter() {
+    fKeyFilter = event -> {
+      if (!running) return;
+      if (event instanceof KeyEvent ke
+          && ke.getID() == KeyEvent.KEY_PRESSED
+          && ke.getKeyCode() == KeyEvent.VK_F) {
+        ke.consume();
+      }
+    };
+    Toolkit.getDefaultToolkit().addAWTEventListener(fKeyFilter, AWTEvent.KEY_EVENT_MASK);
+  }
+
+  // ══════════════════════════════════════════
 
   public void show() {
     frame.setVisible(true);
@@ -143,12 +224,15 @@ public final class FishBotUI {
 
     startBtn.setEnabled(false);
     stopBtn.setEnabled(true);
+    sellThresholdSpinner.setEnabled(false);
+    maxFishSpinner.setEnabled(false);
     logArea.setText("");
     statusLabel.setText("● 启动中...");
     statusLabel.setForeground(new Color(0xFFA500));
 
     running = true;
-    botThread = new Thread(() -> {
+
+    Thread botThread = new Thread(() -> {
       try {
         runBotLoop();
       } catch (Exception ex) {
@@ -161,6 +245,8 @@ public final class FishBotUI {
           statusLabel.setForeground(Color.RED);
           startBtn.setEnabled(true);
           stopBtn.setEnabled(false);
+          sellThresholdSpinner.setEnabled(true);
+          maxFishSpinner.setEnabled(true);
         });
       }
     }, "bot-worker");
@@ -182,8 +268,8 @@ public final class FishBotUI {
     PhaseDetector detector = new PhaseDetector(cfg, bank);
     PhaseStabilizer stabilizer = new PhaseStabilizer(cfg.phaseStableFrames);
     BaitShopFlow baitShop = new BaitShopFlow(cfg, bank, input);
-    AutoSellFlow autoSell = new AutoSellFlow(cfg, input);
-    bot = new FishBot(cfg, window, input, detector, stabilizer, baitShop, autoSell);
+    AutoSellFlow autoSell = new AutoSellFlow(cfg, input, bank);
+    bot = new FishBot(cfg, window, input, detector, stabilizer, baitShop, autoSell, bank);
 
     SwingUtilities.invokeLater(() -> {
       statusLabel.setText("● 运行中");
@@ -216,13 +302,11 @@ public final class FishBotUI {
   // ── Logging ──
 
   private static final Logger LOG = Logger.getLogger(FishBotUI.class.getName());
-  private static final SimpleDateFormat SDF = new SimpleDateFormat("HH:mm:ss");
 
   private void setupUILogging() {
     Logger root = Logger.getLogger("");
     root.setLevel(Level.INFO);
 
-    // Remove default console handler — UI log area replaces it
     for (Handler h : root.getHandlers()) {
       root.removeHandler(h);
     }
@@ -235,7 +319,6 @@ public final class FishBotUI {
   private void appendLog(String msg) {
     SwingUtilities.invokeLater(() -> {
       logArea.append(msg + "\n");
-      // Trim if too long
       if (logArea.getLineCount() > 2000) {
         try {
           int end = logArea.getLineEndOffset(logArea.getLineCount() - 1000);
@@ -245,19 +328,15 @@ public final class FishBotUI {
     });
   }
 
-  /** Custom log handler that feeds into the UI's log area. */
   private class UILogHandler extends Handler {
     private final SimpleFormatter fmt = new SimpleFormatter();
 
-    UILogHandler() {
-      setFormatter(fmt);
-    }
+    UILogHandler() { setFormatter(fmt); }
 
     @Override
     public void publish(LogRecord record) {
       if (!isLoggable(record)) return;
-      String msg = fmt.format(record).stripTrailing();
-      appendLog(msg);
+      appendLog(fmt.format(record).stripTrailing());
     }
 
     @Override public void flush() {}

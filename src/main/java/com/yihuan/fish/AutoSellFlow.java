@@ -2,52 +2,45 @@ package com.yihuan.fish;
 
 import com.sun.jna.platform.win32.WinDef.HWND;
 import com.yihuan.fish.input.BotInput;
+import com.yihuan.fish.vision.TemplateBank;
+import com.yihuan.fish.vision.TemplateMatcher;
+import com.yihuan.fish.vision.TemplateMatcher.Match;
 
 import java.awt.Rectangle;
 import java.awt.image.BufferedImage;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
-/**
- * Sub-state machine for the auto-sell flow, triggered when the number of fish caught
- * reaches or exceeds {@link FishConfig#sellThreshold}.
- *
- * <pre>
- *   READY → fishCaughtCount >= sellThreshold → AutoSellFlow
- *     Press Q (open warehouse)
- *     → Click sell icon
- *     → Click "一键售卖" (sell all)
- *     → Click "确认" (confirm)
- *     → Click anywhere (dismiss success page)
- *     → Press ESC (return to game)
- *     → back to READY, fishCaughtCount reset
- * </pre>
- */
 public final class AutoSellFlow {
   private static final Logger LOG = Logger.getLogger(AutoSellFlow.class.getName());
+  private static final int MAX_RETRIES = 3;
 
   public enum State {
     IDLE,
-    ENTER_WAREHOUSE,  // Press Q
-    CLICK_SELL_ICON,  // Click the sell icon in the warehouse UI
-    CLICK_SELL_ALL,   // Click "一键售卖"
-    CLICK_CONFIRM,    // Click "确认" on the sell confirm dialog
-    CLICK_DISMISS,    // Click anywhere to dismiss the success page
-    EXIT              // Press ESC to return to fishing
+    ENTER_WAREHOUSE,
+    CLICK_SELL_ICON,
+    CLICK_SELL_ALL,
+    CLICK_CONFIRM,
+    CLICK_DISMISS,
+    EXIT
   }
 
   private final FishConfig cfg;
   private final BotInput input;
+  private final TemplateBank bank;
 
   private State state = State.IDLE;
   private int stepDelayRemaining;
+  private boolean sellAllClicked;
+  private int sellAllRetryCount;
 
-  public AutoSellFlow(FishConfig cfg, BotInput input) {
+  public AutoSellFlow(FishConfig cfg, BotInput input, TemplateBank bank) {
     this.cfg = cfg;
     this.input = input;
+    this.bank = bank;
   }
 
-  /** Whether the sell flow is currently consuming ticks. */
   public boolean isActive() {
     return state != State.IDLE;
   }
@@ -56,32 +49,24 @@ public final class AutoSellFlow {
     return state;
   }
 
-  /** Start the sell flow (called from FishBot when threshold is reached). */
   public void start() {
     state = State.ENTER_WAREHOUSE;
     stepDelayRemaining = 0;
-    LOG.info("Auto-sell flow started (fish caught >= " + cfg.sellThreshold + ").");
+    sellAllClicked = false;
+    sellAllRetryCount = 0;
+    LOG.info("【售卖】已触发, 钓鱼数=" + cfg.sellThreshold);
   }
 
-  /** Reset to IDLE. Called when the flow finishes or is aborted. */
   public void reset() {
     state = State.IDLE;
     stepDelayRemaining = 0;
+    sellAllClicked = false;
+    sellAllRetryCount = 0;
   }
 
-  /**
-   * Process one tick of the sell flow.
-   *
-   * @param shot   current screenshot (client area)
-   * @param client game client screen rect
-   * @param hwnd   game window handle (for PostMessage input)
-   */
   public void tick(BufferedImage shot, Rectangle client, HWND hwnd) {
-    if (state == State.IDLE) {
-      return;
-    }
+    if (state == State.IDLE) return;
 
-    // Count down inter-step delay
     if (stepDelayRemaining > 0) {
       stepDelayRemaining -= Math.max(1, cfg.fightTickGapMinMs);
       return;
@@ -90,7 +75,7 @@ public final class AutoSellFlow {
     switch (state) {
       case ENTER_WAREHOUSE -> doEnterWarehouse();
       case CLICK_SELL_ICON -> doClickSellIcon(client);
-      case CLICK_SELL_ALL  -> doClickSellAll(client);
+      case CLICK_SELL_ALL  -> doClickSellAll(shot, client);
       case CLICK_CONFIRM   -> doClickConfirm(client);
       case CLICK_DISMISS   -> doClickDismiss(client);
       case EXIT            -> doExit();
@@ -101,7 +86,7 @@ public final class AutoSellFlow {
   // --- Step implementations ---
 
   private void doEnterWarehouse() {
-    LOG.info("Pressing Q to open warehouse.");
+    LOG.info("【售卖】按Q打开仓库");
     input.keyTap(java.awt.event.KeyEvent.VK_Q);
     advance(State.CLICK_SELL_ICON, cfg.baitShopUiTransitionMs);
   }
@@ -111,19 +96,58 @@ public final class AutoSellFlow {
         + (client.width - cfg.sellIconMarginLeft - cfg.sellIconMarginRight) / 2;
     int cy = client.y + cfg.sellIconMarginTop
         + (client.height - cfg.sellIconMarginTop - cfg.sellIconMarginBottom) / 2;
-    LOG.info("Clicking sell icon at (" + cx + "," + cy + ").");
+    LOG.info("【售卖】点击出售图标 (" + cx + "," + cy + ")");
+    input.ensureGameForeground();
     input.leftClickHoldAt(cx, cy, 0, cfg.baitShopWheelClickHoldMs);
     advance(State.CLICK_SELL_ALL, cfg.baitShopUiTransitionMs);
   }
 
-  private void doClickSellAll(Rectangle client) {
-    int cx = client.x + cfg.sellAllBtnMarginLeft
-        + (client.width - cfg.sellAllBtnMarginLeft - cfg.sellAllBtnMarginRight) / 2;
-    int cy = client.y + cfg.sellAllBtnMarginTop
-        + (client.height - cfg.sellAllBtnMarginTop - cfg.sellAllBtnMarginBottom) / 2;
-    LOG.info("Clicking '一键售卖' at (" + cx + "," + cy + ").");
-    input.leftClickHoldAt(cx, cy, 0, cfg.baitShopWheelClickHoldMs);
-    advance(State.CLICK_CONFIRM, cfg.baitShopUiTransitionMs);
+  private void doClickSellAll(BufferedImage shot, Rectangle client) {
+    if (!sellAllClicked) {
+      // 阶段1: 点击一键售卖
+      int cx = client.x + cfg.sellAllBtnMarginLeft
+          + (client.width - cfg.sellAllBtnMarginLeft - cfg.sellAllBtnMarginRight) / 2;
+      int cy = client.y + cfg.sellAllBtnMarginTop
+          + (client.height - cfg.sellAllBtnMarginTop - cfg.sellAllBtnMarginBottom) / 2;
+      LOG.info("【售卖】点击一键售卖 (" + cx + "," + cy + ") (第" + (sellAllRetryCount + 1) + "/" + MAX_RETRIES + "次)");
+      input.ensureGameForeground();
+      input.leftClickHoldAt(cx, cy, 0, cfg.baitShopWheelClickHoldMs);
+      sellAllClicked = true;
+      stepDelayRemaining = cfg.baitShopUiTransitionMs;
+      return;
+    }
+
+    // 阶段2: 验证出售确认弹窗是否出现
+    if (isSellConfirmVisible(shot)) {
+      LOG.info("【售卖】✓ 出售确认弹窗已出现");
+      sellAllClicked = false;
+      sellAllRetryCount = 0;
+      advance(State.CLICK_CONFIRM, cfg.baitShopUiTransitionMs);
+    } else {
+      sellAllRetryCount++;
+      if (sellAllRetryCount < MAX_RETRIES) {
+        LOG.info("【售卖】确认弹窗未出现, 重试一键售卖 (第" + (sellAllRetryCount + 1) + "/" + MAX_RETRIES + "次)");
+        sellAllClicked = false;
+        stepDelayRemaining = 200;
+      } else {
+        LOG.warning("【售卖】已达最大重试次数, ESC退出仓库");
+        input.keyTap(java.awt.event.KeyEvent.VK_ESCAPE);
+        reset();
+      }
+    }
+  }
+
+  /** 检查出售确认弹窗是否可见 */
+  private boolean isSellConfirmVisible(BufferedImage shot) {
+    int w = shot.getWidth();
+    int h = shot.getHeight();
+    int rx = cfg.sellConfirmDialogMarginLeft;
+    int ry = cfg.sellConfirmDialogMarginTop;
+    int rw = w - rx - cfg.sellConfirmDialogMarginRight;
+    int rh = h - ry - cfg.sellConfirmDialogMarginBottom;
+    if (rw < bank.sellConfirmDialog.getWidth() || rh < bank.sellConfirmDialog.getHeight()) return false;
+    Match m = TemplateMatcher.matchBest(shot, rx, ry, rw, rh, bank.sellConfirmDialog, 2);
+    return m.score() >= cfg.sellConfirmDialogThreshold;
   }
 
   private void doClickConfirm(Rectangle client) {
@@ -131,26 +155,20 @@ public final class AutoSellFlow {
         + (client.width - cfg.sellConfirmBtnMarginLeft - cfg.sellConfirmBtnMarginRight) / 2;
     int cy = client.y + cfg.sellConfirmBtnMarginTop
         + (client.height - cfg.sellConfirmBtnMarginTop - cfg.sellConfirmBtnMarginBottom) / 2;
-    LOG.info("Clicking sell confirm button at (" + cx + "," + cy + ").");
+    LOG.info("【售卖】点击确认按钮 (" + cx + "," + cy + ")");
+    input.ensureGameForeground();
     input.leftClickHoldAt(cx, cy, 0, cfg.baitShopWheelClickHoldMs);
     advance(State.CLICK_DISMISS, cfg.baitShopUiTransitionMs);
   }
 
   private void doClickDismiss(Rectangle client) {
-    ThreadLocalRandom r = ThreadLocalRandom.current();
-    int x1 = client.x + 10;
-    int x2 = client.x + client.width - 10;
-    int y1 = client.y + (int) (client.height * (1.0 - cfg.baitShopDismissBottomAreaPct));
-    int y2 = client.y + (int) (client.height * 0.96);
-    int dx = r.nextInt(x1, x2 + 1);
-    int dy = r.nextInt(y1, y2 + 1);
-    LOG.info("Clicking dismiss area at (" + dx + "," + dy + ") after sell success.");
-    input.leftClickHoldAt(dx, dy, 0, cfg.baitShopWheelClickHoldMs);
+    LOG.info("【售卖】ESC关闭出售成功页");
+    input.keyTap(java.awt.event.KeyEvent.VK_ESCAPE);
     advance(State.EXIT, cfg.baitShopUiTransitionMs);
   }
 
   private void doExit() {
-    LOG.info("Pressing ESC to exit warehouse and return to fishing.");
+    LOG.info("【售卖】ESC退出仓库, 返回钓鱼");
     input.keyTap(java.awt.event.KeyEvent.VK_ESCAPE);
     reset();
   }

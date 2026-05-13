@@ -23,6 +23,18 @@ public final class TemplateBank {
   public final BufferedImage changeBaitBtn;
   /** 加满后验证图 — 匹配成功说明加满点击已生效 */
   public final BufferedImage fillUpConfirm;
+  /** 货币不足提示 — 购买鱼饵时余额不够弹出的提示 */
+  public final BufferedImage noCurrency;
+  /** 出售确认弹窗 — 点击一键售卖后验证 */
+  public final BufferedImage sellConfirmDialog;
+  /** 轮盘鱼饵详情弹窗 — 点击目标鱼饵后出现 */
+  public final BufferedImage baitWheelDetailPopup;
+  /** 月卡领取弹窗 — 每日5:00重置后出现 */
+  public final BufferedImage monthlyCardPopup;
+  /** Pre-READY 界面的"开始钓鱼"按钮 */
+  public final BufferedImage preReadyStartBtn;
+  /** 鱼饵未选择提示 — 点击"开始钓鱼"后如果没装鱼饵会弹出 */
+  public final BufferedImage baitNotSelected;
 
   public TemplateBank(Path imageDir) throws IOException {
     if (!Files.isDirectory(imageDir)) {
@@ -38,6 +50,12 @@ public final class TemplateBank {
     fillUpBtn = load(imageDir.resolve("加满按钮.png"));
     changeBaitBtn = load(imageDir.resolve("E_更换鱼饵.png"));
     fillUpConfirm = load(imageDir.resolve("拉满.png"));
+    noCurrency = load(imageDir.resolve("货币不足.png"));
+    sellConfirmDialog = load(imageDir.resolve("一键出售确认弹窗.png"));
+    baitWheelDetailPopup = load(imageDir.resolve("E_弹窗判断.png"));
+    monthlyCardPopup = load(imageDir.resolve("月卡.png"));
+    preReadyStartBtn = load(imageDir.resolve("开始钓鱼.png"));
+    baitNotSelected = load(imageDir.resolve("鱼饵未选择.png"));
   }
 
   private static BufferedImage load(Path p) throws IOException {

@@ -52,6 +52,7 @@ import com.sun.jna.platform.win32.WinDef.WPARAM;
  */
 public final class SemiBackgroundMouse {
 
+  private static final int WM_MOUSEMOVE = 0x0200;
   private static final int WM_LBUTTONDOWN = 0x0201;
   private static final int WM_LBUTTONUP = 0x0202;
   private static final int MK_LBUTTON = 0x0001;
@@ -64,7 +65,7 @@ public final class SemiBackgroundMouse {
    * game's message loop to pick up and process the click (typically 1 game frame
    * = ~16ms at 60fps), but short enough that the cursor flicker is imperceptible.
    */
-  private static final int POST_CLICK_RESTORE_DELAY_MS = 25;
+  private static final int POST_CLICK_RESTORE_DELAY_MS = 120;
 
   private SemiBackgroundMouse() {}
 
@@ -171,11 +172,12 @@ public final class SemiBackgroundMouse {
    * Moves cursor to target, presses left button, holds for {@code holdMs},
    * releases, then restores cursor. For drag operations or long-click interactions.
    */
-  public static void backgroundClickHold(HWND hwnd, int screenX, int screenY, int holdMs) {
+  public static void backgroundClickHold(HWND hwnd, int screenX, int screenY, int holdMs, int hoverMs) {
     POINT old = new POINT();
     User32.INSTANCE.GetCursorPos(old);
 
     User32.INSTANCE.SetCursorPos(screenX, screenY);
+    sleepMs(hoverMs); // 悬停
 
     POINT pt = new POINT();
     pt.x = screenX;
@@ -183,6 +185,9 @@ public final class SemiBackgroundMouse {
     User32Extra.INSTANCE.ScreenToClient(hwnd, pt);
 
     LPARAM pos = new LPARAM((pt.y << 16) | (pt.x & 0xFFFF));
+    // 先发鼠标移动事件, 让游戏UI知道鼠标在按钮上
+    User32.INSTANCE.PostMessage(hwnd, WM_MOUSEMOVE, new WPARAM(0), pos);
+    sleepMs(30);
     User32.INSTANCE.PostMessage(hwnd, WM_LBUTTONDOWN, new WPARAM(MK_LBUTTON), pos);
 
     sleepMs(holdMs);
