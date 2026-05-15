@@ -31,7 +31,12 @@ cp image/app.ico "$STAGING/"
 echo ""
 echo "=== 3. 生成 exe ==="
 OUTPUT="$PROJECT_DIR/output"
-rm -rf "$OUTPUT"
+rm -rf "$OUTPUT" 2>/dev/null || true
+# 如果旧输出目录被锁定无法删除, 输出到新目录
+if [ -d "$OUTPUT/$APP_NAME" ]; then
+  OUTPUT="$OUTPUT/${APP_NAME}-v2"
+  echo "旧目录被占用, 输出到 $OUTPUT"
+fi
 
 jpackage --type app-image \
   --name "$APP_NAME" \

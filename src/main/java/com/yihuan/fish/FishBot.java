@@ -38,6 +38,7 @@ public final class FishBot implements Runnable {
   private long lastInfoHeartbeatMs;
   private long lastActionStallWarnMs;
   private boolean debugScreenshotSaved;
+  private long lastMonthlyCardCheckMs;
   private int fishCaughtCount;
   private int totalFishCaught;
   private boolean autoSellWasActive;
@@ -106,6 +107,15 @@ public final class FishBot implements Runnable {
 
       warnIfUnexpectedClientSize(client);
 
+      // 月卡检测: 在时间窗口内每5秒截屏检测一次
+      if (isMonthlyCardTimeWindow()) {
+        long now = System.currentTimeMillis();
+        if (now - lastMonthlyCardCheckMs >= cfg.monthlyCardPollIntervalMs) {
+          lastMonthlyCardCheckMs = now;
+          handleMonthlyCardPopup(client);
+        }
+      }
+
       BufferedImage shot;
       if (cfg.postMessageKeys && window.getHwnd() != null) {
         shot = input.captureClient(window.getHwnd());
@@ -154,10 +164,6 @@ public final class FishBot implements Runnable {
             } else if (fishCaughtCount >= cfg.sellThreshold && cfg.sellThreshold > 0) {
               autoSell.start();
             } else {
-              // 月卡弹窗检测: 只在 UTC+8 3:55~4:05 窗口内检查
-              if (isMonthlyCardTimeWindow()) {
-                checkMonthlyCardPopup(client);
-              }
               // Pre-READY 检测: 误触ESC来到钓鱼前页面时, 点"开始钓鱼"
               if (checkPreReady(client)) {
                 return;
@@ -371,17 +377,25 @@ public final class FishBot implements Runnable {
     }
   }
 
-  /** 判断当前时间是否在月卡检测窗口(UTC+8 3:55~4:05)内 */
+  private long lastTimeWindowCacheMs;
+  private boolean cachedTimeWindowResult;
+
+  /** 判断当前时间是否在月卡检测窗口(UTC+8 4:59~5:01)内. 结果缓存1秒避免每次tick都创建Calendar. */
   private boolean isMonthlyCardTimeWindow() {
+    long now = System.currentTimeMillis();
+    if (now - lastTimeWindowCacheMs < 1000) {
+      return cachedTimeWindowResult;
+    }
+    lastTimeWindowCacheMs = now;
     java.util.Calendar c = java.util.Calendar.getInstance();
-    // 转为 UTC+8
     c.add(java.util.Calendar.HOUR_OF_DAY, 8);
     int h = c.get(java.util.Calendar.HOUR_OF_DAY);
     int m = c.get(java.util.Calendar.MINUTE);
     int start = cfg.monthlyCardCheckHourStart * 60 + cfg.monthlyCardCheckMinuteStart;
     int end = cfg.monthlyCardCheckHourEnd * 60 + cfg.monthlyCardCheckMinuteEnd;
-    int now = h * 60 + m;
-    return now >= start && now <= end;
+    int minutes = h * 60 + m;
+    cachedTimeWindowResult = minutes >= start && minutes <= end;
+    return cachedTimeWindowResult;
   }
 
   /** 检测 Pre-READY 界面, 如果有则点击"开始钓鱼"并验证是否进入 READY */
@@ -451,25 +465,89 @@ public final class FishBot implements Runnable {
     }
   }
 
-  /** 检测并关闭月卡弹窗（TODO 点击位置后续可配置） */
-  private void checkMonthlyCardPopup(Rectangle client) {
+  /**
+   * 月卡领流程: 在 4:59~5:01 (UTC+8) 窗口内每5秒调用一次.
+   *
+   * Step 1 — 检测 /image/月卡领取.png → 按ESC关闭领取页, 进入确认页.
+   * Step 2 — 检测 /image/月卡领取确认.png → 点击下方20%区域退出,
+   *          最多重试 {@link FishConfig#monthlyCardConfirmMaxRetries} 次,
+   *          仍不退出则强制ESC.
+   */
+  private void handleMonthlyCardPopup(Rectangle client) {
     BufferedImage shot = input.captureScreen(client);
     if (shot == null) return;
     try {
       int w = shot.getWidth();
       int h = shot.getHeight();
-      int rx = cfg.monthlyCardRoiLeft;
-      int ry = cfg.monthlyCardRoiTop;
-      int rw = w - rx - cfg.monthlyCardRoiRight;
-      int rh = h - ry - cfg.monthlyCardRoiBottom;
-      if (rw < bank.monthlyCardPopup.getWidth() || rh < bank.monthlyCardPopup.getHeight()) return;
-      Match m = TemplateMatcher.matchBest(shot, rx, ry, rw, rh, bank.monthlyCardPopup, 2);
-      if (m.score() >= cfg.monthlyCardThreshold) {
-        LOG.info("检测到月卡弹窗(score=" + String.format("%.2f", m.score()) + "), 点击屏幕中央关闭");
-        // TODO 点击位置后续根据实际按钮位置调整
-        int cx = client.x + client.width / 2;
-        int cy = client.y + client.height / 2;
-        input.leftClickHoldAt(cx, cy, 0, 300);
+
+      int cRx = cfg.monthlyCardClaimMarginLeft;
+      int cRy = cfg.monthlyCardClaimMarginTop;
+      int cRw = w - cRx - cfg.monthlyCardClaimMarginRight;
+      int cRh = h - cRy - cfg.monthlyCardClaimMarginBottom;
+      if (cRw >= bank.monthlyCardClaim.getWidth() && cRh >= bank.monthlyCardClaim.getHeight()) {
+        Match m = TemplateMatcher.matchBest(shot, cRx, cRy, cRw, cRh, bank.monthlyCardClaim, 2);
+        if (m.score() >= cfg.monthlyCardClaimThreshold) {
+          LOG.info("检测到月卡领取页面(score=" + String.format("%.2f", m.score()) + "), 按ESC");
+          input.keyTap(java.awt.event.KeyEvent.VK_ESCAPE);
+          input.humanGapMs(300, 500);
+          return;
+        }
+      }
+
+      int confRx = cfg.monthlyCardClaimConfirmMarginLeft;
+      int confRy = cfg.monthlyCardClaimConfirmMarginTop;
+      int confRw = w - confRx - cfg.monthlyCardClaimConfirmMarginRight;
+      int confRh = h - confRy - cfg.monthlyCardClaimConfirmMarginBottom;
+      if (confRw >= bank.monthlyCardClaimConfirm.getWidth()
+          && confRh >= bank.monthlyCardClaimConfirm.getHeight()) {
+        Match m = TemplateMatcher.matchBest(
+            shot, confRx, confRy, confRw, confRh, bank.monthlyCardClaimConfirm, 2);
+        if (m.score() >= cfg.monthlyCardClaimConfirmThreshold) {
+          LOG.info("检测到月卡领取确认页面(score="
+              + String.format("%.2f", m.score()) + "), 点击下方退出");
+          for (int i = 0; i < cfg.monthlyCardConfirmMaxRetries; i++) {
+            int cx = client.x + client.width / 2;
+            int cy = client.y
+                + (int) (client.height * (1.0 - cfg.monthlyCardDismissBottomAreaPct / 2));
+            input.leftClickHoldAt(cx, cy, 0, 200);
+            input.humanGapMs(200, 400);
+
+            BufferedImage recheck = input.captureScreen(client);
+            if (recheck == null) continue;
+            try {
+              int rw = recheck.getWidth();
+              int rh = recheck.getHeight();
+              int rrw =
+                  rw - cfg.monthlyCardClaimConfirmMarginLeft - cfg.monthlyCardClaimConfirmMarginRight;
+              int rrh =
+                  rh - cfg.monthlyCardClaimConfirmMarginTop - cfg.monthlyCardClaimConfirmMarginBottom;
+              if (rrw >= bank.monthlyCardClaimConfirm.getWidth()
+                  && rrh >= bank.monthlyCardClaimConfirm.getHeight()) {
+                Match m2 = TemplateMatcher.matchBest(
+                    recheck,
+                    cfg.monthlyCardClaimConfirmMarginLeft,
+                    cfg.monthlyCardClaimConfirmMarginTop,
+                    rrw,
+                    rrh,
+                    bank.monthlyCardClaimConfirm,
+                    2);
+                if (m2.score() < cfg.monthlyCardClaimConfirmThreshold) {
+                  LOG.info("✓ 月卡领取确认页面已关闭");
+                  return;
+                }
+              } else {
+                return;
+              }
+            } finally {
+              recheck.flush();
+            }
+            LOG.info("月卡领取确认页面仍在, 第" + (i + 1) + "/"
+                + cfg.monthlyCardConfirmMaxRetries + "次重试");
+          }
+          LOG.warning("月卡领取确认页面重试" + cfg.monthlyCardConfirmMaxRetries
+              + "次未关闭, 强制ESC退出");
+          input.keyTap(java.awt.event.KeyEvent.VK_ESCAPE);
+        }
       }
     } finally {
       shot.flush();

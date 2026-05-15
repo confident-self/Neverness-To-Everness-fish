@@ -304,17 +304,42 @@ public final class FishConfig {
   public int preReadyBtnMarginBottom = 61;
   public double preReadyBtnThreshold = 0.70;
 
-  /** TODE 月卡弹窗检测 — 检测区域(屏幕中央半区), 点击位置暂时用屏幕中心 */
-  public int monthlyCardRoiLeft = 320;
-  public int monthlyCardRoiRight = 320;
-  public int monthlyCardRoiTop = 180;
-  public int monthlyCardRoiBottom = 180;
-  public double monthlyCardThreshold = 0.70;
-  /** 检测窗口(UTC+8): 3:55 ~ 4:05 */
-  public int monthlyCardCheckHourStart = 3;
-  public int monthlyCardCheckMinuteStart = 55;
-  public int monthlyCardCheckHourEnd = 4;
-  public int monthlyCardCheckMinuteEnd = 5;
+  // --- 月卡领取流程 ---
+
+  /**
+   * 月卡领取页面检测 — /image/月卡领取.png
+   * 检测后按ESC进入月卡领取确认页面
+   */
+  public int monthlyCardClaimMarginLeft = 497;
+  public int monthlyCardClaimMarginRight = 483;
+  public int monthlyCardClaimMarginTop = 154;
+  public int monthlyCardClaimMarginBottom = 52;
+  public double monthlyCardClaimThreshold = 0.70;
+
+  /**
+   * 月卡领取确认页面检测 — /image/月卡领取确认.png
+   * 检测后点击下方位置退出, 最多重试3次, 仍不退出则强制ESC
+   */
+  public int monthlyCardClaimConfirmMarginLeft = 555;
+  public int monthlyCardClaimConfirmMarginRight = 555;
+  public int monthlyCardClaimConfirmMarginTop = 345;
+  public int monthlyCardClaimConfirmMarginBottom = 284;
+  public double monthlyCardClaimConfirmThreshold = 0.70;
+
+  /** 确认页点击退出重试次数 */
+  public int monthlyCardConfirmMaxRetries = 3;
+
+  /** 点击底部区域比例 — 确认页点击位置为 clientHeight * (1 - 此值/2) */
+  public double monthlyCardDismissBottomAreaPct = 0.20;
+
+  /** 检测窗口(UTC+8): 4:59 ~ 5:01 (游戏服务器5:00重置) */
+  public int monthlyCardCheckHourStart = 4;
+  public int monthlyCardCheckMinuteStart = 59;
+  public int monthlyCardCheckHourEnd = 5;
+  public int monthlyCardCheckMinuteEnd = 1;
+
+  /** 月卡检测轮询间隔(ms) */
+  public int monthlyCardPollIntervalMs = 5000;
 
   /** VK code: cast from ready (default F). */
   public int castVk = java.awt.event.KeyEvent.VK_F;

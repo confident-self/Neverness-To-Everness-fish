@@ -29,8 +29,10 @@ public final class TemplateBank {
   public final BufferedImage sellConfirmDialog;
   /** 轮盘鱼饵详情弹窗 — 点击目标鱼饵后出现 */
   public final BufferedImage baitWheelDetailPopup;
-  /** 月卡领取弹窗 — 每日5:00重置后出现 */
-  public final BufferedImage monthlyCardPopup;
+  /** 月卡领取页面 — 游戏5:00重置后弹窗, 检测后按ESC */
+  public final BufferedImage monthlyCardClaim;
+  /** 月卡领取确认页面 — 按ESC关闭月卡领取页后出现, 点击下方退出 */
+  public final BufferedImage monthlyCardClaimConfirm;
   /** Pre-READY 界面的"开始钓鱼"按钮 */
   public final BufferedImage preReadyStartBtn;
   /** 鱼饵未选择提示 — 点击"开始钓鱼"后如果没装鱼饵会弹出 */
@@ -53,7 +55,8 @@ public final class TemplateBank {
     noCurrency = load(imageDir.resolve("货币不足.png"));
     sellConfirmDialog = load(imageDir.resolve("一键出售确认弹窗.png"));
     baitWheelDetailPopup = load(imageDir.resolve("E_弹窗判断.png"));
-    monthlyCardPopup = load(imageDir.resolve("月卡.png"));
+    monthlyCardClaim = load(imageDir.resolve("月卡领取.png"));
+    monthlyCardClaimConfirm = load(imageDir.resolve("月卡领取确认.png"));
     preReadyStartBtn = load(imageDir.resolve("开始钓鱼.png"));
     baitNotSelected = load(imageDir.resolve("鱼饵未选择.png"));
   }
